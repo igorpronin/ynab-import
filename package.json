@@ -1,0 +1,16 @@
+{
+  "name": "ynab-import",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^0.19.2",
+    "csv-parser": "^2.3.3",
+    "iconv-lite": "^0.6.0"
+  }
+}

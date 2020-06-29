@@ -1,0 +1,8 @@
+node_modules
+my_YNAB
+imported
+for_import
+tmp
+.idea
+.DS_Store
+config.js
