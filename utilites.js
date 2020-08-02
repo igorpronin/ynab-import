@@ -7,6 +7,6 @@ const makeId = (length = 5) => {
   return result;
 };
 
-export default {
+module.exports = {
   makeId,
 };

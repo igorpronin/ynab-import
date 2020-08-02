@@ -12,8 +12,6 @@ const ID = makeId();
 const YNABBudgetId = config.YNABBudgetId;
 const YNABAccountId = config.YNABAccountId;
 
-const converter = iconv.decodeStream(config.fileEncoding);
-
 // api functions
 const YNABApi = require('./api');
 const getBudgets = YNABApi.getBudgets;
@@ -24,6 +22,7 @@ const getCategories = YNABApi.getCategories;
 const getCategory = YNABApi.getCategory;
 const importTransactions = YNABApi.importTransactions;
 
+const downloadedFilesDir = config.downloadPath;
 const filesDir = path.join(__dirname, 'for_import');
 const archDir = path.join(__dirname, 'imported');
 if (!fs.existsSync(filesDir)){
@@ -33,23 +32,56 @@ if (!fs.existsSync(archDir)){
   fs.mkdirSync(archDir);
 }
 
-function readDirPromise() {
+function readDir(dir) {
   return new Promise((resolve, reject) => {
-    fs.readdir(filesDir, (err, files) => {
+    fs.readdir(dir, (err, files) => {
       if (err) {
         reject(err);
         return console.log('Unable to scan directory: ' + err);
       }
+      files = files.filter(file => {
+        if (file !== '.DS_Store') return file;
+      });
       resolve(files);
     });
   });
 }
 
+function moveFile(oldPath, newPath) {
+  fs.rename(oldPath, newPath, err => {
+    if (err) throw err;
+  });
+}
+
+function decodeFile(file) {
+  const fileContent = fs.readFileSync(file);
+  const decodedFileContent = iconv.decode(fileContent, config.fileEncoding);
+  fs.writeFileSync(file, decodedFileContent);
+}
+
+async function getDownloadedFiles() {
+  return new Promise(async (resolve, reject) => {
+    const dirFiles = await readDir(downloadedFilesDir);
+    const downloadedFiles = dirFiles.filter(file => {
+      return /^operations.*.csv$/.test(file)
+    });
+    if (downloadedFiles.length) {
+      downloadedFiles.map(async file => {
+        await fs.renameSync(
+          path.join(downloadedFilesDir, file),
+          path.join(filesDir, file)
+        )
+      })
+    }
+    resolve();
+  })
+}
+
 function handleCsv(file) {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
+    await decodeFile(file);
     const results = [];
     fs.createReadStream(file)
-      .pipe(converter)
       .pipe(csv({ separator: ';' }))
       .on('data', (data) => {
         results.push(data);
@@ -64,29 +96,31 @@ function handleCsv(file) {
 function formatData(accountId, operations) {
   const transactions = [];
   operations.forEach((operation) => {
-    const description = operation['Описание'];
+    let description = operation['Описание'];
+    if (operation['Валюта операции'] !== 'RUB') {
+      description += ` (${operation['Валюта операции']} ${operation['Сумма операции'].replace('-', '')})`;
+    }
+    description.trim();
     const item = {
       date: operation['Дата операции'].split(' ')[0].split('.').reverse().join('-'),
-      amount: Number(operation['Сумма операции'].replace(',', '.')) * 1000,
+      amount: Number(operation['Сумма платежа'].replace(',', '.')) * 1000, // Формат чисел в YNAB
       account_id: accountId,
-      memo: `${description} [import ID: ${ID}]`
+      memo: description
     };
     if (mapping[description]) {
       item.category_id = mapping[description].id;
+    }
+    if (config.isMemoWithId) {
+      item.memo += ` [import ID: ${ID}]`;
     }
     transactions.push(item);
   });
   return { transactions };
 }
 
-function moveFile(oldPath, newPath) {
-  fs.rename(oldPath, newPath, err => {
-    if (err) throw err;
-  });
-}
-
 async function execute() {
-  const files = await readDirPromise();
+  await getDownloadedFiles();
+  let files = await readDir(filesDir);
   if (files.length > 0) {
     files.forEach(async file => {
       const filePath = path.join(filesDir, file);
@@ -100,11 +134,11 @@ async function execute() {
 }
 
 // Get key information with this functions
-getBudgets();
+// getBudgets();
 // getBudget(YNABBudgetId);
 // getAccounts(YNABBudgetId);
 // getPayees(YNABBudgetId);
 // getCategories(YNABBudgetId);
 // getCategory(YNABBudgetId, '4c34c33d-990c-4cd5-8fd7-e461755cf892');
 
-// execute();
+execute();
