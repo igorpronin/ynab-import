@@ -106,6 +106,9 @@ const importTransactions = (budgetId, data) => {
         console.log(data);
         saveLog('transactions.json', data);
         resolve();
+      })
+      .catch(err => {
+        reject(err);
       });
   })
 };

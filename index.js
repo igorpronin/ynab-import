@@ -2,6 +2,10 @@ const path = require('path');
 const fs = require('fs');
 const csv = require('csv-parser');
 const iconv = require('iconv-lite');
+const puppeteer = require('puppeteer');
+const readline = require('readline');
+const moment = require('moment');
+moment().format();
 
 const config = require('./config.js');
 const mapping = require('./mapping.json');
@@ -30,6 +34,59 @@ if (!fs.existsSync(filesDir)){
 }
 if (!fs.existsSync(archDir)){
   fs.mkdirSync(archDir);
+}
+
+function promptCode() {
+  return new Promise((resolve, reject) => {
+    let smsCode;
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+    rl.question('Enter code: ', function(code) {
+      smsCode = code;
+      rl.close();
+      resolve(smsCode);
+    });
+  })
+}
+
+function getDataFromTinkoff() {
+  return new Promise(async (resolve, reject) => {
+    const browser = await puppeteer.launch({
+      headless: false,
+      args: [`--window-size=1440,900`],
+      executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+    });
+    const context = browser.defaultBrowserContext();
+    context.overridePermissions("https://www.tinkoff.ru/", ["geolocation", "notifications"]);
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1440, height: 900 });
+    await page.goto('https://www.tinkoff.ru/login/');
+
+    await page.waitFor(1000);
+    await page.click('[name="login"]');
+    await page.keyboard.type(config.login);
+    await page.click('[type="submit"]');
+    const code = await promptCode();
+    await page.keyboard.type(code);
+    await page.waitFor(1000);
+    await page.keyboard.type(config.pass);
+    await page.click('[type="submit"]');
+    await page.waitFor(8000);
+    const cookies = await page.cookies();
+    const psid = cookies.find(item => item.name === 'psid').value;
+    const startDate = moment(config.startDate).subtract(config.timezone, 'hours').format('YYYY-MM-DDTHH') + '%3A00%3A00.000Z';
+    const endDate = moment(config.endDate).add(1, 'day').subtract(config.timezone, 'hours').subtract(1, 'hours').format('YYYY-MM-DDTHH') + '%3A59%3A59.999Z';
+    try {
+      await page.goto(`https://www.tinkoff.ru/api/common/v1/export_operations/?format=csv&sessionid=${psid}&start=${startDate}&end=${endDate}&card=0&account=5033199372`);
+    } catch {
+      console.log('Какая-то ошибка при запросе файла, но все вроде бы должно быть ок...')
+    }
+    await page.waitFor(5000);
+    // await browser.close();
+    resolve();
+  })
 }
 
 function readDir(dir) {
@@ -79,7 +136,9 @@ async function getDownloadedFiles() {
 
 function handleCsv(file) {
   return new Promise(async (resolve, reject) => {
-    await decodeFile(file);
+    if (config.decode) {
+      await decodeFile(file);
+    }
     const results = [];
     fs.createReadStream(file)
       .pipe(csv({ separator: ';' }))
@@ -103,7 +162,7 @@ function formatData(accountId, operations) {
     description.trim();
     const item = {
       date: operation['Дата операции'].split(' ')[0].split('.').reverse().join('-'),
-      amount: Number(operation['Сумма платежа'].replace(',', '.')) * 1000, // Формат чисел в YNAB
+      amount: Math.round(Number(operation['Сумма платежа'].replace(',', '.')) * 1000), // Формат чисел в YNAB
       account_id: accountId,
       memo: description
     };
@@ -119,7 +178,9 @@ function formatData(accountId, operations) {
 }
 
 async function execute() {
+  await getDataFromTinkoff();
   await getDownloadedFiles();
+
   let files = await readDir(filesDir);
   if (files.length > 0) {
     files.forEach(async file => {
@@ -127,10 +188,17 @@ async function execute() {
       const archFilePath = path.join(archDir, file);
       const fileContent = await handleCsv(filePath);
       const transactions = formatData(YNABAccountId, fileContent);
-      await importTransactions(YNABBudgetId, transactions);
+      // console.log(transactions);
+      try {
+        await importTransactions(YNABBudgetId, transactions);
+      } catch (e) {
+        console.log(e.response);
+        return;
+      }
       moveFile(filePath, archFilePath);
     });
   }
+
 }
 
 // Get key information with this functions
@@ -142,3 +210,12 @@ async function execute() {
 // getCategory(YNABBudgetId, '4c34c33d-990c-4cd5-8fd7-e461755cf892');
 
 execute();
+
+// Выгрузка за одни сутки
+// https://www.tinkoff.ru/api/common/v1/export_operations/
+// ?format=csv
+// &sessionid=XXXX
+// &start=2020-08-13T17%3A00%3A00.000Z
+// &end=2020-08-14T16%3A59%3A59.999Z
+// &card=0
+// &account=5333444555
