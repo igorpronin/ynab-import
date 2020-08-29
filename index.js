@@ -8,7 +8,6 @@ const moment = require('moment');
 moment().format();
 
 const config = require('./config.js');
-const mapping = require('./mapping.json');
 
 const makeId = require('./utilites.js').makeId;
 const ID = makeId();
@@ -151,23 +150,52 @@ function handleCsv(file) {
   });
 }
 
+function defineCategoryMatch(description, mapping) {
+  for (let i = 0; i < mapping.length; i++) {
+    const item = mapping[i];
+    const operations = item.operations;
+    for (let j = 0; j < operations.length; j++) {
+      const operation = operations[i];
+      if (typeof operation === 'string' && operation === description) {
+        return {
+          categoryId: item.id
+        }
+      }
+      if (typeof operation === 'object' && operation.name === description) {
+        const result = {
+          categoryId: item.id
+        };
+        if (operation.extra_description) {
+          result.extra_description = operation.extra_description;
+        }
+        return result
+      }
+    }
+  }
+  return false;
+}
+
 // Форматирование данных Тинькофф для YNAB
 function formatData(accountId, operations) {
   const transactions = [];
   operations.forEach((operation) => {
     let description = operation['Описание'];
-    if (operation['Валюта операции'] !== 'RUB') {
-      description += ` (${operation['Валюта операции']} ${operation['Сумма операции'].replace('-', '')})`;
-    }
-    description.trim();
     const item = {
       date: operation['Дата операции'].split(' ')[0].split('.').reverse().join('-'),
       amount: Math.round(Number(operation['Сумма платежа'].replace(',', '.')) * 1000), // Формат чисел в YNAB
       account_id: accountId,
       memo: description
     };
-    if (mapping[description]) {
-      item.category_id = mapping[description].id;
+    if (operation['Валюта операции'] !== 'RUB') {
+      item.memo += ` (${operation['Валюта операции']} ${operation['Сумма операции'].replace('-', '')})`;
+    }
+    item.memo.trim();
+    const categoryMatch = defineCategoryMatch(description, config.mapping);
+    if (categoryMatch) {
+      item.category_id = categoryMatch.categoryId;
+      if (categoryMatch.extra_description) {
+        item.memo += ` ${categoryMatch.extra_description}`;
+      }
     }
     if (config.isMemoWithId) {
       item.memo += ` [import ID: ${ID}]`;
@@ -188,7 +216,6 @@ async function execute() {
       const archFilePath = path.join(archDir, file);
       const fileContent = await handleCsv(filePath);
       const transactions = formatData(YNABAccountId, fileContent);
-      // console.log(transactions);
       try {
         await importTransactions(YNABBudgetId, transactions);
       } catch (e) {
